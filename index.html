@@ -71,55 +71,6 @@
             color: #8b949e;
         }
 
-        /* Extra stats bar (HRV & Session Timer) */
-        .extra-panel {
-            display: flex;
-            justify-content: center;
-            gap: 12px;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
-        }
-        .extra-box {
-            background: #111;
-            padding: 8px 14px;
-            border-radius: 6px;
-            border: 1px solid #222;
-            font-size: 13px;
-            color: #8b949e;
-            font-family: monospace;
-        }
-        .extra-box span { color: #ff66b2; font-weight: bold; }
-
-        /* Time in Zones Bar */
-        .zones-breakdown {
-            width: 100%;
-            background: #111;
-            border: 1px solid #222;
-            border-radius: 6px;
-            padding: 10px 15px;
-            margin-top: 12px;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .zones-bar-title {
-            font-size: 12px;
-            color: #8b949e;
-            text-align: left;
-            font-family: monospace;
-        }
-        .zones-bar-track {
-            display: flex;
-            height: 10px;
-            background: #222;
-            border-radius: 5px;
-            overflow: hidden;
-            width: 100%;
-            gap: 1px;
-        }
-        .zone-seg { height: 100%; transition: width 0.3s ease; }
-
         .audio-container {
             display: flex;
             align-items: center;
@@ -149,7 +100,7 @@
             border: 2px solid #222;
             border-radius: 6px;
             width: 100%;
-            height: 260px;
+            height: 280px;
             box-shadow: 0 0 20px rgba(255, 102, 178, 0.15);
             transition: box-shadow 0.3s ease;
             display: block;
@@ -200,14 +151,14 @@
         body.obs-mode .controls, body.obs-mode h2, body.obs-mode .status, body.obs-mode .share-box, body.obs-mode .audio-container { display: none !important; }
         body.obs-mode canvas#ecgCanvas { border: none; background: transparent; box-shadow: none; }
         body.obs-mode canvas#trendCanvas { border: none; background: rgba(0, 0, 0, 0.45); }
-        body.obs-mode .panel-box, body.obs-mode .extra-box, body.obs-mode .zones-breakdown { background: rgba(0, 0, 0, 0.6); border: none; }
+        body.obs-mode .panel-box { background: rgba(0, 0, 0, 0.6); border: none; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h2>PerfectlyPounding's ECG</h2>
-    <div class="status" id="statusText">Connecting to MQTT Broker...</div>
+    <div class="status" id="statusText">Disconnected</div>
 
     <div class="top-panel">
         <div class="panel-box">
@@ -241,26 +192,12 @@
         </div>
     </div>
 
-    <!-- Extra panel for Session Duration, HRV and Time in Zones -->
-    <div class="extra-panel">
-        <div class="extra-box">Session: <span id="sessionTimer">00:00</span></div>
-        <div class="extra-box">HRV (RMSSD): <span id="hrvVal">--</span> ms</div>
-        <div class="extra-box">Stress Index: <span id="stressVal">--</span></div>
-    </div>
-
     <div class="controls" id="streamerControls">
         <button id="connectBtn" onclick="connectPolar()">Connect Polar H10 (Streamer)</button>
     </div>
 
-    <canvas id="ecgCanvas" width="900" height="260"></canvas>
+    <canvas id="ecgCanvas" width="900" height="280"></canvas>
     <canvas id="trendCanvas" width="900" height="110"></canvas>
-
-    <div class="zones-breakdown">
-        <div class="zones-bar-title">TIME IN ZONES BREAKDOWN</div>
-        <div class="zones-bar-track" id="zonesBarTrack">
-            <!-- Segments filled dynamically -->
-        </div>
-    </div>
 
     <div class="share-box" id="shareBox">
         <p style="margin: 0 0 8px 0; font-size: 14px;">Permanent Viewer Link (or append <b>&obs=1</b> for OBS):</p>
@@ -286,7 +223,6 @@
     const mqttEcgTopic = `live/polar/ecg/${streamId}`;
     const mqttBpmTopic = `live/polar/bpm/${streamId}`;
     const mqttRrTopic  = `live/polar/rr/${streamId}`;
-    const mqttStateTopic = `live/polar/state/${streamId}`;
 
     const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
 
@@ -297,127 +233,52 @@
     const trendCtx = trendCanvas.getContext('2d');
 
     let sampleQueue = [];
-    let ecgPublishBuffer = []; 
     let screenData = new Array(canvas.width).fill(500);
     let sweepCursor = 0;
     const sweepSpeed = 2;
 
     const MAX_HISTORY = 300;
     let bpmHistory = new Array(MAX_HISTORY).fill(null);
-    let zoneTimeCounts = { Z0: 0, Z1: 0, Z2: 0, Z3: 0, Z4: 0, Z5: 0 };
-    let rrBuffer = [];
 
     let lastPacketTime = 0;
     let isConnected = false;
     let currentBpm = 0;
     let maxBpm = 0;
     let totalCalories = 0;
-    let sessionSeconds = 0;
     let activeLineColor = '#ff3399';
 
-    function getZoneDetails(bpm) {
-        if (bpm <= 0) return { key: 'Z0', label: '--', color: '#ff3399' };
-        if (bpm < 98)  return { key: 'Z0', label: 'Resting / Chill', color: '#ff85c0' };
-        if (bpm < 117) return { key: 'Z1', label: 'Z1: Warm-up', color: '#ff3399' };
-        if (bpm < 136) return { key: 'Z2', label: 'Z2: Normal / Active', color: '#ff1a8c' };
-        if (bpm < 156) return { key: 'Z3', label: 'Z3: Mild Panic', color: '#ff0066' };
-        if (bpm < 175) return { key: 'Z4', label: 'Z4: SVT Mode', color: '#ff2a2a' };
-        return { key: 'Z5', label: 'Z5: Severe Tachycardia', color: '#ff0000' };
+    function getZoneInfo(bpm) {
+        if (bpm <= 0) return { label: '--', color: '#ff3399' };
+        if (bpm < 98)  return { label: 'Resting / Chill', color: '#ff85c0' };
+        if (bpm < 117) return { label: 'Z1: Warm-up', color: '#ff3399' };
+        if (bpm < 136) return { label: 'Z2: Normal / Active', color: '#ff1a8c' };
+        if (bpm < 156) return { label: 'Z3: Mild Panic', color: '#ff0066' };
+        if (bpm < 175) return { label: 'Z4: SVT Mode', color: '#ff2a2a' };
+        return { label: 'Z5: Severe Tachycardia', color: '#ff0000' };
     }
 
-    // Κεντρικός χρονοδιακόπτης ανά δευτερόλεπτο
     setInterval(() => {
         const hasRecentSignal = (Date.now() - lastPacketTime <= 1500) && currentBpm > 0;
 
         if ((isConnected || roomParam) && hasRecentSignal) {
-            if (roomParam) {
-                sessionSeconds++;
-                updateSessionTimerDisplay(sessionSeconds);
-            }
-
             const weight = 85;
             const age = 25;
             let kcalPerMin = (-20.4022 + (0.4472 * currentBpm) - (0.1263 * weight) + (0.074 * age)) / 4.184;
             let kcalPerSec = kcalPerMin / 60;
-            if (kcalPerSec && !roomParam) {
+            if (kcalPerSec > 0) {
                 totalCalories += kcalPerSec;
                 document.getElementById('calVal').innerText = Math.floor(totalCalories);
             }
 
-            const zone = getZoneDetails(currentBpm);
-            if (!roomParam) {
-                zoneTimeCounts[zone.key]++;
-                updateZonesBreakdownBar();
-            }
-
-            if (isConnected && !roomParam && client.connected) {
-                client.publish(mqttStateTopic, JSON.stringify({
-                    sec: sessionSeconds,
-                    hist: bpmHistory,
-                    kcal: totalCalories,
-                    max: maxBpm,
-                    zones: zoneTimeCounts
-                }));
-            }
+            bpmHistory.push(currentBpm);
+            if (bpmHistory.length > MAX_HISTORY) bpmHistory.shift();
+        } else if (isConnected || roomParam) {
+            bpmHistory.push(null);
+            if (bpmHistory.length > MAX_HISTORY) bpmHistory.shift();
         }
+
         drawTrendChart();
     }, 1000);
-
-    // Throttle αποστολής ECG μέσω MQTT (Streamer)
-    setInterval(() => {
-        if (isConnected && !roomParam && client.connected && ecgPublishBuffer.length > 0) {
-            client.publish(mqttEcgTopic, JSON.stringify(ecgPublishBuffer));
-            ecgPublishBuffer = [];
-        }
-    }, 50);
-
-    function updateSessionTimerDisplay(sec) {
-        const mins = Math.floor(sec / 60);
-        const s = sec % 60;
-        document.getElementById('sessionTimer').innerText = 
-            String(mins).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-    }
-
-    function updateZonesBreakdownBar() {
-        const track = document.getElementById('zonesBarTrack');
-        const total = Object.values(zoneTimeCounts).reduce((a, b) => a + b, 0);
-        if (total === 0) {
-            track.innerHTML = '<div class="zone-seg" style="width: 100%; background: #222;"></div>';
-            return;
-        }
-
-        const colors = { Z0: '#ff85c0', Z1: '#ff3399', Z2: '#ff1a8c', Z3: '#ff0066', Z4: '#ff2a2a', Z5: '#ff0000' };
-        let html = '';
-        for (let k in zoneTimeCounts) {
-            let pct = (zoneTimeCounts[k] / total) * 100;
-            if (pct > 0) {
-                html += `<div class="zone-seg" style="width: ${pct}%; background: ${colors[k]};" title="${k}: ${Math.floor(pct)}%"></div>`;
-            }
-        }
-        track.innerHTML = html;
-    }
-
-    function calculateHrvAndStress(rrMs) {
-        rrBuffer.push(rrMs);
-        if (rrBuffer.length > 20) rrBuffer.shift();
-
-        if (rrBuffer.length < 3) {
-            document.getElementById('hrvVal').innerText = '--';
-            document.getElementById('stressVal').innerText = '--';
-            return;
-        }
-
-        let sumSqDiff = 0;
-        for (let i = 1; i < rrBuffer.length; i++) {
-            let diff = rrBuffer[i] - rrBuffer[i-1];
-            sumSqDiff += (diff * diff);
-        }
-        let rmssd = Math.round(Math.sqrt(sumSqDiff / (rrBuffer.length - 1)));
-        document.getElementById('hrvVal').innerText = rmssd;
-
-        let stress = Math.max(10, Math.min(999, Math.round(10000 / (rmssd + 10))));
-        document.getElementById('stressVal').innerText = stress;
-    }
 
     function drawTrendChart() {
         const w = trendCanvas.width;
@@ -449,7 +310,8 @@
 
         trendCtx.fillStyle = 'rgba(255, 102, 178, 0.45)';
         trendCtx.fillText('5-MIN BPM TREND', 42, 13);
-        trendCtx.fillText('Start', 40, h - 5);
+        trendCtx.fillText('-5m', 40, h - 5);
+        trendCtx.fillText('-2.5m', w / 2, h - 5);
         trendCtx.textAlign = 'right';
         trendCtx.fillText('NOW', w - 12, h - 5);
         trendCtx.textAlign = 'left';
@@ -528,57 +390,33 @@
     client.on('connect', () => {
         if (roomParam) {
             document.getElementById('streamerControls').style.display = 'none';
-            document.getElementById('statusText').innerText = `Watching Stream (${streamId})... Waiting for data`;
+            document.getElementById('statusText').innerText = `Watching Medical Stream (${streamId})...`;
             client.subscribe(mqttEcgTopic);
             client.subscribe(mqttBpmTopic);
             client.subscribe(mqttRrTopic);
-            client.subscribe(mqttStateTopic);
         } else {
-            document.getElementById('statusText').innerText = 'MQTT Connected - Ready to Connect Polar';
+            document.getElementById('statusText').innerText = 'Disconnected';
         }
     });
 
     client.on('message', (topic, message) => {
         if (roomParam) {
             if (topic === mqttEcgTopic) {
-                try {
-                    const samples = JSON.parse(message.toString());
-                    sampleQueue.push(...samples);
-                    lastPacketTime = Date.now();
-                } catch (e) {
-                    console.error("ECG parse error:", e);
-                }
+                const samples = JSON.parse(message.toString());
+                sampleQueue.push(...samples);
+                lastPacketTime = Date.now();
             } else if (topic === mqttBpmTopic) {
                 updateBpmData(parseInt(message.toString()) || 0);
                 playBeep();
             } else if (topic === mqttRrTopic) {
-                let rr = parseInt(message.toString());
-                document.getElementById('rrVal').innerText = rr;
-                calculateHrvAndStress(rr);
-            } else if (topic === mqttStateTopic) {
-                try {
-                    const state = JSON.parse(message.toString());
-                    sessionSeconds = state.sec;
-                    updateSessionTimerDisplay(sessionSeconds);
-                    bpmHistory = state.hist;
-                    totalCalories = state.kcal;
-                    document.getElementById('calVal').innerText = Math.floor(totalCalories);
-                    if (state.max > maxBpm) {
-                        maxBpm = state.max;
-                        document.getElementById('maxBpmVal').innerText = maxBpm;
-                    }
-                    zoneTimeCounts = state.zones;
-                    updateZonesBreakdownBar();
-                } catch (e) {
-                    console.error("State parse error:", e);
-                }
+                document.getElementById('rrVal').innerText = message.toString();
             }
         }
     });
 
     function updateBpmData(bpm) {
         currentBpm = bpm;
-        const zone = getZoneDetails(currentBpm);
+        const zone = getZoneInfo(currentBpm);
         activeLineColor = zone.color;
 
         const bpmEl = document.getElementById('bpmVal');
@@ -601,11 +439,6 @@
             maxBpm = currentBpm;
             document.getElementById('maxBpmVal').innerText = maxBpm;
         }
-
-        if (!roomParam) {
-            bpmHistory.push(currentBpm);
-            if (bpmHistory.length > MAX_HISTORY) bpmHistory.shift();
-        }
     }
 
     function resetStatsUI() {
@@ -617,10 +450,6 @@
         document.getElementById('zoneVal').style.color = '#ff66b2';
         document.getElementById('zoneBox').style.borderColor = '#222';
         document.getElementById('rrVal').innerText = '--';
-        document.getElementById('hrvVal').innerText = '--';
-        document.getElementById('stressVal').innerText = '--';
-        document.getElementById('calVal').innerText = '0';
-        document.getElementById('sessionTimer').innerText = '00:00';
         document.getElementById('heartIcon').classList.remove('beating');
         if (!isObs) {
             canvas.style.boxShadow = '0 0 20px rgba(255, 102, 178, 0.15)';
@@ -655,10 +484,8 @@
 
             isConnected = true;
             totalCalories = 0;
-            sessionSeconds = 0;
             maxBpm = 0;
             bpmHistory = new Array(MAX_HISTORY).fill(null);
-            zoneTimeCounts = { Z0: 0, Z1: 0, Z2: 0, Z3: 0, Z4: 0, Z5: 0 };
             document.getElementById('maxBpmVal').innerText = '--';
             document.getElementById('rrVal').innerText = '--';
             document.getElementById('connectBtn').disabled = true;
@@ -712,7 +539,6 @@
             if (rrValues.length > 0) {
                 let latestRr = rrValues[rrValues.length - 1].toString();
                 document.getElementById('rrVal').innerText = latestRr;
-                calculateHrvAndStress(parseInt(latestRr));
                 client.publish(mqttRrTopic, latestRr);
             }
         }
@@ -733,8 +559,8 @@
         sampleQueue.push(...newSamples);
         lastPacketTime = Date.now();
 
-        if (!roomParam) {
-            ecgPublishBuffer.push(...newSamples);
+        if (client.connected && !roomParam) {
+            client.publish(mqttEcgTopic, JSON.stringify(newSamples));
         }
     }
 
@@ -764,12 +590,9 @@
             ctx.textAlign = 'left';
         }
 
-        if (roomParam && Date.now() - lastPacketTime > 1200) {
+        if (Date.now() - lastPacketTime > 1200) {
             sampleQueue = [];
             resetStatsUI();
-            document.getElementById('statusText').innerText = `Watching Stream (${streamId})... Waiting for signal`;
-        } else if (roomParam && lastPacketTime > 0) {
-            document.getElementById('statusText').innerText = `🔴 LIVE - Connected to Medical Stream (${streamId})`;
         }
 
         for (let s = 0; s < sweepSpeed; s++) {
